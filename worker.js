@@ -1,5 +1,4 @@
-import { connect } from "cloudflare:sockets";
-
+ 
 /*
  * ===================== QUICK SETUP (no code editing) =====================
  * 1. Paste this file into a Cloudflare Worker and Deploy.
@@ -107,16 +106,20 @@ import { connect } from "cloudflare:sockets";
  *    - [UNVERIFIED] Whether Telegram will ever deploy a modified ME transport protocol
  *      (e.g., over WebSockets or TLS) that omits TCP source port binding from key derivation.
  * ============================================================================
- */
+ ورود به پنل: رمز دیگه توی آدرس نمیاد. پنل روی https://domain/account باز می‌شه، یک فرم رمز نشون می‌ده، و رمز با POST داخل بدنه‌ی درخواست فرستاده می‌شه. لاگ‌های Cloudflare آدرس و هدرها رو ثبت می‌کنن، ولی بدنه رو نه، و خود کد هم رمز رو جایی لاگ نمی‌کنه.
+مسیرهای قبلی: آدرس قدیمی /<ADMIN_KEY> و حالت ?key= حذف شدن و حالا صفحه‌ی فیک رو نشون می‌دن. ژنراتور قدیمی سکرت (که پیش‌فرض خاموشه) هم الان رمز رو فقط از بدنه‌ی POST قبول می‌کنه.
 
-// Middle-End Protocol Constants (Documented for specification completeness)
+یک متغیر اختیاری PANEL_PATH هم اضافه کردم، چون اگه همه‌ی نصب‌ها پنل رو روی /account داشته باشن، این خودش می‌تونه برای شناسایی استفاده بشه. اگه مثلاً PANEL_PATH = /my-orders-7f3k بذاری، پنل روی اون مسیر میاد. این مسیر توی لاگ دیده می‌شه، ولی بدون رمز به کسی دسترسی نمی‌ده.
+ */
+import { connect } from "cloudflare:sockets";
+
 const ME_CONSTANTS = {
-  RPC_NONCE: 0x7acb87aa,        // Little-endian: 0xaa, 0x87, 0xcb, 0x7a
-  RPC_HANDSHAKE: 0x7682eef5,    // Little-endian: 0xf5, 0xee, 0x82, 0x76
+  RPC_NONCE: 0x7acb87aa,
+  RPC_HANDSHAKE: 0x7682eef5,
   RPC_FLAGS: 0x00000000,
   CRYPTO_AES: 0x00000001,
-  RPC_PROXY_REQ: 0x36cef1ee,    // Little-endian: 0xee, 0xf1, 0xce, 0x36
-  RPC_PROXY_ANS: 0x0dfb190e,    // Little-endian: 0x0e, 0x19, 0xfb, 0x0d
+  RPC_PROXY_REQ: 0x36cef1ee,
+  RPC_PROXY_ANS: 0x0dfb190e,
   FLAG_HAS_AD_TAG: 0x00000008,
   FLAG_EXTMODE2: 0x00020000,
   FLAG_PAD: 0x08000000,
@@ -125,17 +128,16 @@ const ME_CONSTANTS = {
   FLAG_QUICKACK: 0x80000000
 };
 
-// Default Configuration fallback (overridden by dashboard environment variables)
 const HTTPS_PORTS = [443, 2053, 2083, 2087, 2096, 8443];
 
 const CONFIG = {
-  secretHex: "",                // Overridden by env.SECRET (32 hex or dd+32 hex)
-  adTagHex: "",                 // Overridden by env.AD_TAG (32 hex)
-  hostnames: ["*"],             // Overridden by env.HOSTNAME (comma-separated or '*')
-  debug: false,                 // Overridden by env.DEBUG ("true" or "1")
+  secretHex: "",
+  adTagHex: "",
+  hostnames: ["*"],
+  debug: false,
 
-  generatorEnabled: false,      // Secret page is OFF by default (it used to leak SECRET publicly)
-  generatorKey: "",             // Optional custom seed for secret derivation
+  generatorEnabled: false,
+  generatorKey: "",
   acceptGenerated: false,
 
   dc: {
@@ -148,13 +150,14 @@ const CONFIG = {
   },
   dcPort: 443,
   dcPorts: [443, 80, 5222],
-  carrier: "websocket-lanes",   // "websocket-lanes" (one WS per stream) or "websocket" (all streams in one WS)
+  carrier: "websocket-lanes",
   sessionPath: "/api/v1/session",
   wsPath: "/api/v1/ws",
+  panelPath: "/account",
   batchBytes: 2097152,
-  bootstrapTtl: 3600,           // 1 hour (resilient against session renegotiation and client reconnects)
+  bootstrapTtl: 3600,
   sessionTtl: 86400,
-  maxStreams: 6,                // Safe default for Cloudflare Workers Free plan socket limits
+  maxStreams: 6,
   maxQueued: 16777216,
   streamWindow: 4194304,
   dataChunk: 65536
@@ -167,11 +170,10 @@ const TOKEN_KIND_BOOTSTRAP = 1;
 const TOKEN_KIND_SESSION = 2;
 const PORT_MODE_BASE = 10;
 const REQUEST_LIMIT = 16777216;
+const LOGIN_BODY_LIMIT = 4096;
 
 const PERMISSIONS_POLICY = "accelerometer=(), autoplay=(), camera=(), clipboard-read=(), clipboard-write=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-create=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), web-share=(), xr-spatial-tracking=()";
 
-// Realistic premium fashion e-commerce storefront for anti-censorship camouflage
-// (resists GFW / TSPU / DPI active probing — looks like a legitimate clothing brand)
 const DECOY_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -319,12 +321,12 @@ footer{background:var(--surface);border-top:1px solid var(--border);padding:4rem
 </style>
 </head>
 <body>
-<div class="announce"><div class="announce-inner"><span>Free express shipping on orders over \\$150</span><span>&bull;</span><span>New Season &mdash; Autumn/Winter 2026 Collection now live</span><span>&bull;</span><span>Complimentary gift wrapping on all orders</span><span>&bull;</span><span>Free express shipping on orders over \\$150</span><span>&bull;</span><span>New Season &mdash; Autumn/Winter 2026 Collection now live</span><span>&bull;</span><span>Complimentary gift wrapping on all orders</span></div></div>
+<div class="announce"><div class="announce-inner"><span>Free express shipping on orders over $150</span><span>&bull;</span><span>New Season &mdash; Autumn/Winter 2026 Collection now live</span><span>&bull;</span><span>Complimentary gift wrapping on all orders</span><span>&bull;</span><span>Free express shipping on orders over $150</span><span>&bull;</span><span>New Season &mdash; Autumn/Winter 2026 Collection now live</span><span>&bull;</span><span>Complimentary gift wrapping on all orders</span></div></div>
 <nav><div class="nav-inner"><a href="/" class="nav-logo">LUXVEIL</a><ul class="nav-links"><li><a href="/">New Arrivals</a></li><li><a href="/">Women</a></li><li><a href="/">Men</a></li><li><a href="/">Outerwear</a></li><li><a href="/">Accessories</a></li><li><a href="/">Sale</a></li></ul><div class="nav-icons"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.35-4.35"/></svg><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><div class="cart-badge"><svg viewBox="0 0 24 24"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div class="hamburger"><span></span><span></span><span></span></div></div></div></nav>
 <section class="hero"><div class="hero-text"><div class="hero-tag">Autumn/Winter 2026</div><h1>Redefine Your<br><em>Everyday</em> Elegance</h1><p>Discover our latest collection of meticulously crafted garments, designed with premium fabrics and contemporary silhouettes for the modern wardrobe.</p><div class="hero-btns"><a href="/" class="btn btn-primary">Shop Collection <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg></a><a href="/" class="btn btn-outline">Lookbook</a></div></div><div class="hero-visual"><div class="hero-img"></div><div class="hero-float"><div class="hf-label">Best Seller</div><div class="hf-value">Cashmere Overcoat</div></div></div></section>
 <div class="banner"><div class="banner-track"><span>Premium Quality</span><span>&#10022;</span><span>Sustainable Materials</span><span>&#10022;</span><span>Handcrafted Details</span><span>&#10022;</span><span>Worldwide Delivery</span><span>&#10022;</span><span>30-Day Returns</span><span>&#10022;</span><span>Premium Quality</span><span>&#10022;</span><span>Sustainable Materials</span><span>&#10022;</span><span>Handcrafted Details</span><span>&#10022;</span><span>Worldwide Delivery</span><span>&#10022;</span><span>30-Day Returns</span></div></div>
-<section class="section"><div class="section-head"><h2>Curated Essentials</h2><p>Timeless pieces designed to transition seamlessly from season to season.</p></div><div class="products"><div class="product"><div class="product-img p1"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Outerwear</div><h3>Wool Blend Overcoat</h3><div class="price">\\$385.00</div><div class="product-colors"><span style="background:#c4b5a3"></span><span style="background:#2c2c2c"></span><span style="background:#8b7355"></span></div></div></div><div class="product"><div class="product-img p2"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Tailoring</div><h3>Relaxed Fit Blazer</h3><div class="price">\\$265.00</div><div class="product-colors"><span style="background:#2c2c2c"></span><span style="background:#3d4f5f"></span></div></div></div><div class="product"><div class="product-img p3"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Knitwear</div><h3>Merino Turtleneck</h3><div class="price">\\$145.00 <span class="old">\\$195.00</span></div><div class="product-colors"><span style="background:#8b7355"></span><span style="background:#f5f0eb"></span><span style="background:#4a3728"></span></div></div></div><div class="product"><div class="product-img p4"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Accessories</div><h3>Leather Crossbody Bag</h3><div class="price">\\$220.00</div><div class="product-colors"><span style="background:#d6cfc4"></span><span style="background:#2c2c2c"></span></div></div></div></div></section>
-<section class="section" style="padding-top:0"><div class="features"><div class="feature"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8l4 2v4l-4 2"/></svg><h4>Free Shipping</h4><p>Complimentary express delivery on all orders over \\$150. Worldwide tracked shipping.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><h4>Secure Checkout</h4><p>256-bit SSL encryption with trusted payment partners. Your data is always protected.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.5 0 4.8 1 6.5 2.6"/><path d="M22 4L12 14.01l-3-3"/></svg><h4>Quality Guarantee</h4><p>Every garment is inspected for quality. 30-day hassle-free returns and exchanges.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M12 3L2 12h3v8h6v-6h2v6h6v-8h3L12 3z"/></svg><h4>Sustainable Fashion</h4><p>Ethically sourced materials with carbon-neutral shipping. Fashion with a conscience.</p></div></div></section>
+<section class="section"><div class="section-head"><h2>Curated Essentials</h2><p>Timeless pieces designed to transition seamlessly from season to season.</p></div><div class="products"><div class="product"><div class="product-img p1"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Outerwear</div><h3>Wool Blend Overcoat</h3><div class="price">$385.00</div><div class="product-colors"><span style="background:#c4b5a3"></span><span style="background:#2c2c2c"></span><span style="background:#8b7355"></span></div></div></div><div class="product"><div class="product-img p2"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Tailoring</div><h3>Relaxed Fit Blazer</h3><div class="price">$265.00</div><div class="product-colors"><span style="background:#2c2c2c"></span><span style="background:#3d4f5f"></span></div></div></div><div class="product"><div class="product-img p3"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Knitwear</div><h3>Merino Turtleneck</h3><div class="price">$145.00 <span class="old">$195.00</span></div><div class="product-colors"><span style="background:#8b7355"></span><span style="background:#f5f0eb"></span><span style="background:#4a3728"></span></div></div></div><div class="product"><div class="product-img p4"><div class="img-fill"></div><div class="quick">Quick View</div></div><div class="product-info"><div class="cat">Accessories</div><h3>Leather Crossbody Bag</h3><div class="price">$220.00</div><div class="product-colors"><span style="background:#d6cfc4"></span><span style="background:#2c2c2c"></span></div></div></div></div></section>
+<section class="section" style="padding-top:0"><div class="features"><div class="feature"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="2"/><path d="M16 8l4 2v4l-4 2"/></svg><h4>Free Shipping</h4><p>Complimentary express delivery on all orders over $150. Worldwide tracked shipping.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg><h4>Secure Checkout</h4><p>256-bit SSL encryption with trusted payment partners. Your data is always protected.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9c2.5 0 4.8 1 6.5 2.6"/><path d="M22 4L12 14.01l-3-3"/></svg><h4>Quality Guarantee</h4><p>Every garment is inspected for quality. 30-day hassle-free returns and exchanges.</p></div><div class="feature"><svg viewBox="0 0 24 24"><path d="M12 3L2 12h3v8h6v-6h2v6h6v-8h3L12 3z"/></svg><h4>Sustainable Fashion</h4><p>Ethically sourced materials with carbon-neutral shipping. Fashion with a conscience.</p></div></div></section>
 <section class="lookbook"><div class="lookbook-img"></div><div class="lookbook-content"><div class="lb-tag">The Lookbook</div><h2>Autumn<br>Silhouettes</h2><p>Explore our editorial collection featuring rich tonal palettes, luxurious textures, and the defining shapes of the season. Each piece tells a story of understated refinement.</p><a href="/" class="btn btn-primary">View Lookbook</a></div></section>
 <section class="section"><div class="section-head"><h2>What Our Clients Say</h2><p>Trusted by thousands of discerning customers worldwide.</p></div><div class="reviews"><div class="review"><div class="review-stars">&starf;&starf;&starf;&starf;&starf;</div><p>&ldquo;The quality of the cashmere overcoat exceeded my expectations. Impeccable tailoring and the fabric feels absolutely luxurious.&rdquo;</p><div class="review-author">&mdash; Sarah M., London</div></div><div class="review"><div class="review-stars">&starf;&starf;&starf;&starf;&starf;</div><p>&ldquo;Fast shipping to Dubai and the packaging was beautiful. The merino turtleneck is now my go-to piece for every occasion.&rdquo;</p><div class="review-author">&mdash; Ahmed K., Dubai</div></div><div class="review"><div class="review-stars">&starf;&starf;&starf;&starf;&starf;</div><p>&ldquo;Finally found a brand that combines minimalist design with real craftsmanship. The blazer fits perfectly &mdash; no alterations needed.&rdquo;</p><div class="review-author">&mdash; Elena V., Paris</div></div></div></section>
 <section class="newsletter"><h2>Join the LUXVEIL World</h2><p>Subscribe for exclusive access to new collections, private sales, and style inspiration.</p><div class="newsletter-form"><input type="email" placeholder="Enter your email address" autocomplete="off"><button type="button">Subscribe</button></div></section>
@@ -635,9 +637,6 @@ function openWebSocket(){
 function scheduleReconnect(){
  if(closed||reconnecting)return;
  reconnecting=true;stopHeartbeat();status('reconnecting');
- // The server-side session (DC sockets + cipher state) died with the old socket.
- // Close those streams towards Telegram so it reopens them at once instead of hanging,
- // and drop uplink bytes that belong to the dead streams.
  for(const id of openStreams){const frame=closeFrame(id);port.postMessage(frame,[frame])}
  openStreams.clear();
  if(upPending.length){let bytes=0;for(const data of upPending)bytes+=data.byteLength;release(bytes,upPending.length,null);upPending.length=0}
@@ -832,7 +831,6 @@ function b64uDecodeStrict(value) {
 }
 
 let sealCache = null;
-// Decodes BUILD_SEAL. Its bytes are also mixed into key derivation (see buildRuntime).
 async function unseal() {
   if (sealCache) return sealCache;
   const raw = atob(BUILD_SEAL);
@@ -907,6 +905,14 @@ function parseAdTag(hexValue) {
   return null;
 }
 
+function resolvePanelPath(env, reserved) {
+  let value = typeof env?.PANEL_PATH === "string" ? env.PANEL_PATH.trim() : "";
+  if (value && !value.startsWith("/")) value = "/" + value;
+  if (value.length > 1 && value.endsWith("/")) value = value.slice(0, -1);
+  if (!/^\/[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*$/.test(value) || reserved.includes(value)) value = CONFIG.panelPath;
+  return value;
+}
+
 function resolveConfig(env) {
   const secretHex = (typeof env?.SECRET === "string" ? env.SECRET : CONFIG.secretHex || "").trim();
   const adTagHex = (typeof env?.AD_TAG === "string" ? env.AD_TAG : CONFIG.adTagHex || "").trim();
@@ -932,6 +938,11 @@ function resolveConfig(env) {
     ? (env.WS_PATH.trim().startsWith("/") ? env.WS_PATH.trim() : "/" + env.WS_PATH.trim())
     : CONFIG.wsPath;
 
+  const panelPath = resolvePanelPath(env, [
+    sessionPath, wsPath, "/api/v1/session", "/api/v1/ws", "/setup",
+    "/robots.txt", "/favicon.ico", "/health", "/status"
+  ]);
+
   const adminKey = (typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "");
   const extraHosts = (typeof env?.EXTRA_HOSTS === "string" ? env.EXTRA_HOSTS : "")
     .split(/[,\s]+/)
@@ -951,6 +962,7 @@ function resolveConfig(env) {
     maxStreams,
     sessionPath,
     wsPath,
+    panelPath,
     generatorEnabled: env?.GENERATOR_ENABLED !== undefined ? (env.GENERATOR_ENABLED === "true" || env.GENERATOR_ENABLED === "1") : CONFIG.generatorEnabled,
     generatorKey: (typeof env?.GENERATOR_KEY === "string" ? env.GENERATOR_KEY : CONFIG.generatorKey || "").trim(),
     acceptGenerated: env?.ACCEPT_GENERATED !== undefined ? (env.ACCEPT_GENERATED === "true" || env.ACCEPT_GENERATED === "1") : CONFIG.acceptGenerated,
@@ -972,7 +984,7 @@ let cachedKey = null;
 
 async function getRuntime(env) {
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.panelPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.adminKey}:${resolved.extraHosts.join(",")}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
@@ -990,7 +1002,6 @@ async function buildRuntime(cfg) {
   let base = parseSecret(cfg.secretHex);
   const secretDerived = !base && !!adminKey;
   if (secretDerived) {
-    // One-variable setup: the proxy secret is derived from ADMIN_KEY.
     base = (await sha256(concat(te.encode("proxygosha-secret-from-admin-v2\n"), seal.bytes, te.encode("\n" + adminKey)))).slice(0, 16);
   }
   const generatorText = String(cfg.generatorKey || "").trim();
@@ -1057,6 +1068,7 @@ async function buildRuntime(cfg) {
     decoyUrl: cfg.decoyUrl,
     sessionPath: cfg.sessionPath,
     wsPath: cfg.wsPath,
+    panelPath: cfg.panelPath,
     acceptGenerated: cfg.acceptGenerated,
     generatorEnabled: cfg.generatorEnabled,
     streamWindow: cfg.streamWindow,
@@ -1182,6 +1194,18 @@ function generatorLabel(url) {
   return null;
 }
 
+async function readPostedKey(request) {
+  const type = (request.headers.get("content-type") || "").toLowerCase();
+  if (!type.startsWith("application/x-www-form-urlencoded")) return null;
+  const declared = parseInt(request.headers.get("content-length") || "0", 10);
+  if (declared > LOGIN_BODY_LIMIT) return null;
+  let text = "";
+  try { text = await request.text(); } catch (_) { return null; }
+  if (text.length > LOGIN_BODY_LIMIT) return null;
+  const value = new URLSearchParams(text).get("key");
+  return typeof value === "string" ? value.trim() : null;
+}
+
 async function serveSecret(cfg, host, label, port) {
   const cleanLabel = String(label || "").replace(/^https?:\/\//i, "").replace(/\/.*$/, "").replace(/[\u0000-\u001f\u007f]/g, "").trim().toLowerCase().slice(0, 128);
   const isCustomDomain = cleanLabel.length > 0;
@@ -1191,25 +1215,20 @@ async function serveSecret(cfg, host, label, port) {
   let isExisting = false;
 
   if (isCustomDomain) {
-    // Generate ASCII hex representation of domain
     for (let i = 0; i < cleanLabel.length; i++) {
       domainHex += cleanLabel.charCodeAt(i).toString(16).padStart(2, "0");
     }
-
-    // Deterministically derive a 16-byte (32-hex) secret based on the address
     if (cfg && cfg.generatorHmac) {
       const derived = await deriveSecret(cfg, cleanLabel);
       if (derived) hex = bytesToHex(derived);
     }
     if (!hex) {
-      // No server-side key: an unkeyed hash of a public domain name would be guessable by anyone.
       hex = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
     }
   } else if (cfg && cfg.base) {
     hex = bytesToHex(cfg.base);
     isExisting = true;
   } else {
-    // Fresh deployment without configured SECRET in env: generate strong random secret
     const randomBytes = crypto.getRandomValues(new Uint8Array(16));
     hex = bytesToHex(randomBytes);
   }
@@ -1265,13 +1284,10 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function panelRequested(url, cfg) {
-  if (!cfg.adminKey) return false;
-  let path = "";
-  try { path = decodeURIComponent(url.pathname.slice(1)); } catch (_) { return false; }
-  if (path.endsWith("/")) path = path.slice(0, -1);
-  if (path && safeEqual(path, cfg.adminKey)) return true;
-  return generatorLabel(url) === "" && safeEqual(url.searchParams.get("key") || "", cfg.adminKey);
+function isPanelPath(url, cfg) {
+  let path = url.pathname;
+  if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+  return path === cfg.panelPath;
 }
 
 function pageHeaders() {
@@ -1285,15 +1301,21 @@ function pageHeaders() {
   };
 }
 
+function loginHeaders() {
+  const headers = pageHeaders();
+  headers["Content-Security-Policy"] = "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+  return headers;
+}
+
 const PAGE_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;max-width:760px;margin:0 auto;padding:16px;background:#f6f7f9;color:#1d2330;line-height:1.8}h1{font-size:21px;margin:8px 0 4px}h2{font-size:16px;margin-top:28px}.card{background:#fff;border-radius:12px;padding:12px 16px;margin:10px 0;box-shadow:0 1px 3px rgba(0,0,0,.08)}a.btn{display:block;text-align:center;background:#2a9df4;color:#fff;text-decoration:none;padding:10px;border-radius:10px;margin:6px 0;font-weight:bold}code,textarea{direction:ltr;text-align:left;font-family:ui-monospace,Consolas,monospace;font-size:12px}textarea{width:100%;height:58px;box-sizing:border-box;border:1px solid #ccd;border-radius:8px;padding:6px}textarea.one{height:34px}.muted{color:#667;font-size:13px}.warn{background:#fff4e5;border-inline-start:4px solid #f0a020}footer.credit{margin:32px 0 8px;text-align:center;font-size:12px;color:#889;direction:ltr}footer.credit a{color:#667}ol{padding-inline-start:22px;margin:4px 0}nav.lang{text-align:end;font-size:14px}nav.lang label{cursor:pointer;padding:4px 10px;border-radius:8px;color:#2a6fd6}"
   + ".fa{display:none}#l-fa:checked~main{direction:rtl;font-family:Tahoma,system-ui,sans-serif}#l-fa:checked~main .en{display:none}#l-fa:checked~main span.fa{display:inline}#l-fa:checked~main div.fa,#l-fa:checked~main p.fa,#l-fa:checked~main ol.fa,#l-fa:checked~main h1.fa,#l-fa:checked~main h2.fa{display:block}#l-en:checked~main nav label[for=l-en],#l-fa:checked~main nav label[for=l-fa]{background:#e3eefc;font-weight:bold}";
 
-// Inline text in both languages; CSS shows one of them (no JavaScript needed).
+const LOGIN_STYLE = "body{font-family:system-ui,-apple-system,'Segoe UI',Tahoma,sans-serif;background:#f6f7f9;color:#1d2330;margin:0;display:flex;min-height:100vh;align-items:center;justify-content:center}main{background:#fff;border-radius:12px;padding:28px 24px;width:100%;max-width:340px;box-shadow:0 1px 3px rgba(0,0,0,.08)}h1{font-size:20px;margin:0 0 16px}input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #ccd;border-radius:8px;font-size:15px;direction:ltr}button{width:100%;margin-top:12px;padding:10px;border:0;border-radius:8px;background:#1d2330;color:#fff;font-size:15px;font-weight:600;cursor:pointer}.err{color:#b42318;font-size:14px;margin:0 0 12px}";
+
 function bi(en, fa) {
   return `<span class="en">${en}</span><span class="fa">${fa}</span>`;
 }
 
-// English is the default; ?lang=fa pre-selects Persian. Switching needs no reload.
 function bilingualPage(title, lang, body, seal) {
   const fa = lang === "fa";
   const credit = `<footer class="credit">ProxyGosha &middot; ${escapeHtml(seal.name)} &middot; <a href="mailto:${escapeHtml(seal.mail)}">${escapeHtml(seal.mail)}</a></footer>`;
@@ -1303,6 +1325,14 @@ function bilingualPage(title, lang, body, seal) {
 ${body}
 ${credit}
 </main></body></html>`;
+}
+
+function serveLogin(cfg, lang, failed) {
+  const fa = lang === "fa";
+  const action = cfg.panelPath + (fa ? "?lang=fa" : "");
+  const error = failed ? `<p class="err">${fa ? "رمز اشتباه است." : "Incorrect password."}</p>` : "";
+  const html = `<!doctype html><html lang="${fa ? "fa" : "en"}"${fa ? ' dir="rtl"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${fa ? "ورود" : "Sign in"}</title><style>${LOGIN_STYLE}</style></head><body><main><h1>${fa ? "ورود" : "Sign in"}</h1>${error}<form method="post" action="${escapeHtml(action)}"><input type="password" name="key" autocomplete="current-password" placeholder="${fa ? "رمز" : "Password"}" required autofocus><button type="submit">${fa ? "ورود" : "Continue"}</button></form></main></body></html>`;
+  return new Response(html, { status: 200, headers: loginHeaders() });
 }
 
 async function servePanel(cfg, host, port, lang) {
@@ -1358,6 +1388,7 @@ ${sections}`;
 async function serveSetup(host, env, lang) {
   const suggested = b64uEncode(crypto.getRandomValues(new Uint8Array(18))).replace(/[-_]/g, "x");
   const current = typeof env?.ADMIN_KEY === "string" ? env.ADMIN_KEY.trim() : "";
+  const panelPath = resolveConfig(env).panelPath;
   const problem = current && current.length < 16
     ? `<div class="card warn">${bi(
         "Your current ADMIN_KEY is too short. It must be at least 16 characters.",
@@ -1369,16 +1400,16 @@ async function serveSetup(host, env, lang) {
 <ol class="en"><li>In the Cloudflare dashboard, open <b>Workers &amp; Pages</b> → this Worker → <b>Settings</b> → <b>Variables and Secrets</b>.</li>
 <li>Click <b>Add</b>. Name: <code>ADMIN_KEY</code>. Value: the key below (or any password of 16+ English letters and digits).</li>
 <li>Click <b>Deploy</b>.</li>
-<li>Open the address below to reach your panel with ready Telegram links.</li></ol>
+<li>Open the address below and enter the key there to reach your panel with ready Telegram links.</li></ol>
 <ol class="fa"><li>در داشبورد کلودفلر: <b>Workers &amp; Pages</b> ← این ورکر ← <b>Settings</b> ← <b>Variables and Secrets</b></li>
 <li>روی <b>Add</b> بزنید. نام: <code>ADMIN_KEY</code> ، مقدار: رمز زیر (یا هر رمز ۱۶+ حرفی از حروف و اعداد انگلیسی)</li>
 <li><b>Deploy</b> را بزنید.</li>
-<li>آدرس زیر را باز کنید تا پنل و لینک‌های آماده تلگرام را ببینید.</li></ol>
+<li>آدرس زیر را باز کنید و رمز را آنجا وارد کنید تا پنل و لینک‌های آماده تلگرام را ببینید.</li></ol>
 ${bi("Suggested key", "رمز پیشنهادی")}:<textarea class="one" readonly>${escapeHtml(suggested)}</textarea>
-${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https://${escapeHtml(host)}/${escapeHtml(suggested)}</textarea></div>
+${bi("Panel address", "آدرس پنل")}:<textarea class="one" readonly>https://${escapeHtml(host)}${escapeHtml(panelPath)}</textarea></div>
 <p class="muted">${bi(
-    "Keep this key private. Anyone who has it can open your panel. If you reload this page, a new key is suggested; use the one you actually saved in Cloudflare.",
-    "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
+    "Keep this key private. Anyone who has it can open your panel. The key is sent in the request body, not in the address, so it does not end up in Cloudflare's request logs. If you reload this page, a new key is suggested; use the one you actually saved in Cloudflare.",
+    "این رمز را جایی امن نگه دارید. هر کس آن را داشته باشد به پنل دسترسی دارد. رمز داخل بدنه‌ی درخواست فرستاده می‌شود، نه در آدرس؛ پس در لاگ‌های کلودفلر ثبت نمی‌شود. با رفرش صفحه رمز جدیدی پیشنهاد می‌شود؛ همان رمزی را استفاده کنید که در کلودفلر ذخیره کرده‌اید."
   )}</p>`;
   return new Response(bilingualPage("Setup", lang, body, await unseal()), { status: 200, headers: pageHeaders() });
 }
@@ -1507,9 +1538,9 @@ function windowFrame(id, amount) {
 }
 
 function tagKind(tag) {
-  if (tag[0] === 0xef && tag[1] === 0xef && tag[2] === 0xef && tag[3] === 0xef) return 1; // abridged
-  if (tag[0] === 0xee && tag[1] === 0xee && tag[2] === 0xee && tag[3] === 0xee) return 2; // intermediate
-  if (tag[0] === 0xdd && tag[1] === 0xdd && tag[2] === 0xdd && tag[3] === 0xdd) return 3; // padded intermediate
+  if (tag[0] === 0xef && tag[1] === 0xef && tag[2] === 0xef && tag[3] === 0xef) return 1;
+  if (tag[0] === 0xee && tag[1] === 0xee && tag[2] === 0xee && tag[3] === 0xee) return 2;
+  if (tag[0] === 0xdd && tag[1] === 0xdd && tag[2] === 0xdd && tag[3] === 0xdd) return 3;
   return 0;
 }
 
@@ -1627,9 +1658,6 @@ class Stream {
     const candidateIps = Array.isArray(address) ? address : [address];
     const candidatePorts = Array.isArray(this.session.cfg.dcPorts) ? this.session.cfg.dcPorts : [this.session.cfg.dcPort || 443];
 
-    // Middle-End / Ad Tag Routing Check:
-    // If AD_TAG is configured, note protocol constraint: native ME handshake requires
-    // preserving outbound TCP source port which Cloudflare Workers' NAPT does not support.
     if (this.session.cfg.adTag && this.session.cfg.debug && !this.session.loggedMeNotice) {
       this.session.loggedMeNotice = true;
       console.log("[tgweb] AD_TAG configured. Native Middle-End handshake from Cloudflare Workers is blocked by Cloudflare egress NAPT (source port translation prevents ME key agreement). Falling back cleanly to Direct-DC mode.");
@@ -1639,12 +1667,7 @@ class Stream {
     const writeKey = await sha256(concat(reversed.subarray(0, 32), this.session.secret));
     const clientWriteIv = reversed.slice(32, 48);
 
-    // FAST MODE (same idea as mtprotoproxy FAST_MODE):
-    // The DC derives its *encrypt* key/iv from reverse(dcHeader[8..56]). We choose
-    // dcHeader[8..56] = reverse(clientWriteKey || clientWriteIv), so the DC encrypts
-    // with exactly the key stream the client expects. DC->client bytes are then
-    // forwarded untouched: no AES work for the heavy (download) direction.
-    const dcKeyMaterial = reverse(concat(writeKey, clientWriteIv)); // 48 bytes
+    const dcKeyMaterial = reverse(concat(writeKey, clientWriteIv));
     this.dcWriteKey = await importAes(dcKeyMaterial.slice(0, 32));
     this.dcWriteIv = dcKeyMaterial.slice(32, 48);
     if (this.dead) return;
@@ -1653,9 +1676,6 @@ class Stream {
     this.dcWritePos = 64;
     this.dcReadPos = 0;
 
-    // Connect to the DC with bounded failover. Every connect() is a subrequest
-    // (50 per invocation on Free) and occupies one of the 6 "connecting" slots,
-    // so: few attempts, random IP order (spreads load), and always close losers.
     let socket = null;
     let lastError = null;
     const ips = candidateIps.slice();
@@ -1682,7 +1702,6 @@ class Stream {
         socket = candidateSocket;
       } catch (connErr) {
         lastError = connErr;
-        // Previously a timed-out socket stayed pending and kept a connection slot busy.
         if (candidateSocket) { try { candidateSocket.close().catch(() => {}); } catch (_) {} }
       } finally {
         if (timer) clearTimeout(timer);
@@ -1701,7 +1720,6 @@ class Stream {
     this.writer = socket.writable.getWriter();
     this.reader = socket.readable.getReader();
 
-    // Construct and send initial Obfuscated2 header to the Telegram DC
     const dcHeader = new Uint8Array(64);
     let safe = false;
     for (let i = 0; i < 16 && !safe; i++) {
@@ -1752,7 +1770,6 @@ class Stream {
           }
           const size = Math.min(value.length - offset, this.sendCredit, this.session.cfg.dataChunk);
           if (size <= 0) continue;
-          // Fast mode: bytes from the DC are already encrypted for the client.
           const chunk = value.subarray(offset, offset + size);
           this.sendCredit -= size;
           this.session.sendFrame(frame(0x02, this.id, chunk));
@@ -1800,7 +1817,6 @@ class Stream {
       this.creditResolve = null;
       resolve();
     }
-    // Free stream locks immediately to prevent socket exhaustion and resource leaks in Cloudflare Workers
     if (this.writer) {
       try { this.writer.releaseLock(); } catch (_) {}
       this.writer = null;
@@ -1820,7 +1836,7 @@ class Stream {
 
 class WsSession {
   constructor(ws, cfg, secret, laneId = 0) {
-    this.laneId = laneId; // > 0: this WebSocket carries exactly one stream (websocket-lanes)
+    this.laneId = laneId;
     this.laneUsed = false;
     this.ws = ws;
     this.cfg = cfg;
@@ -1834,10 +1850,6 @@ class WsSession {
     this.loggedMeNotice = false;
     this.lastPong = Date.now();
 
-    // Periodic KeepAlive Heartbeat (every 25s)
-    // Prevents Cloudflare 100s idle disconnect and ISP/TSPU DPI idle RST injection
-    // Lane sockets must not receive id-0 frames (the bridge rejects cross-lane ids);
-    // MTProto's own pings keep a lane busy.
     this.keepAliveTimer = laneId ? null : setInterval(() => {
       if (this.closed || !this.ws || this.ws.readyState !== 1) {
         if (this.keepAliveTimer) clearInterval(this.keepAliveTimer);
@@ -1862,7 +1874,6 @@ class WsSession {
 
   onStreamClosed(id) {
     if (!this.laneId || this.closed || id !== this.laneId) return;
-    // Lane finished: close this WebSocket so the invocation (and its budget) ends.
     this.dispose();
     try { if (this.ws.readyState === 1) this.ws.close(1000, "done"); } catch (_) {}
   }
@@ -1912,7 +1923,6 @@ class WsSession {
         return;
       }
       if (type === 0x01) {
-        // OPEN frame
         if (id === 0 || size !== 0) {
           this.shutdown();
           return;
@@ -1929,7 +1939,6 @@ class WsSession {
         }
         this.streams.set(id, new Stream(this, id));
       } else if (type === 0x02) {
-        // DATA frame
         if (id === 0 || size === 0) {
           this.shutdown();
           return;
@@ -1938,7 +1947,6 @@ class WsSession {
         if (stream) stream.feed(payload);
         else if (!this.tombstones.has(id)) this.sendFrame(frame(0x03, id, EMPTY));
       } else if (type === 0x03) {
-        // CLOSE frame
         if (id === 0 || size !== 0) {
           this.shutdown();
           return;
@@ -1946,7 +1954,6 @@ class WsSession {
         const stream = this.streams.get(id);
         if (stream) stream.kill(false);
       } else if (type === 0x04) {
-        // WINDOW frame (credit grant)
         if (id === 0 || size !== 4) {
           this.shutdown();
           return;
@@ -1954,12 +1961,10 @@ class WsSession {
         const stream = this.streams.get(id);
         if (stream) stream.addCredit(new DataView(payload.buffer, payload.byteOffset, 4).getUint32(0, false));
       } else if (type === 0x05) {
-        // PING frame from client (0x05) -> respond with PONG (0x06) echoing payload
         if (id === 0) {
           this.sendFrame(frame(0x06, 0, payload));
         }
       } else if (type === 0x06) {
-        // PONG frame from client (0x06) -> acknowledgment of keepalive
         if (id !== 0) {
           this.shutdown();
           return;
@@ -2087,26 +2092,30 @@ export default {
 
       const cfg = await getRuntime(env);
       const lang = url.searchParams.get("lang") === "fa" ? "fa" : "en";
-      // Not configured yet: show a step-by-step setup page (nothing to protect yet).
       if (!cfg) return serveSetup(host, env, lang);
-      // Configured with SECRET only (older setup, no ADMIN_KEY yet): the site stays
-      // camouflaged, but /setup explains how to add ADMIN_KEY. It reveals no secret.
       if (!cfg.adminKey && url.pathname === "/setup") return serveSetup(host, env, lang);
 
-      // Admin panel: https://host/<ADMIN_KEY>  (or legacy ?create-secret&key=<ADMIN_KEY>)
-      if (request.method === "GET" && panelRequested(url, cfg)) return servePanel(cfg, host, port, lang);
+      if (cfg.adminKey && isPanelPath(url, cfg)) {
+        if (request.method === "GET" || request.method === "HEAD") return serveLogin(cfg, lang, false);
+        if (request.method === "POST") {
+          const key = await readPostedKey(request);
+          if (key !== null && safeEqual(key, cfg.adminKey)) return servePanel(cfg, host, port, lang);
+          return serveLogin(cfg, lang, true);
+        }
+        return notFound();
+      }
 
-      // Legacy per-domain secret generator (ACCEPT_GENERATED); also gated by ADMIN_KEY.
       const label = generatorLabel(url);
       if (label !== null) {
         const generatorEnabled = env?.GENERATOR_ENABLED === "true" || env?.GENERATOR_ENABLED === "1";
-        if (!generatorEnabled || !cfg.adminKey || !label || !safeEqual(url.searchParams.get("key") || "", cfg.adminKey)) {
+        if (!generatorEnabled || !cfg.adminKey || !label || request.method !== "POST") {
           return decoy(cfg.decoyUrl, request.method);
         }
+        const key = await readPostedKey(request);
+        if (key === null || !safeEqual(key, cfg.adminKey)) return decoy(cfg.decoyUrl, "GET");
         return serveSecret(cfg, host, label, port);
       }
 
-      // Active Probing Defense & Authentic Web Assets (GFW / TSPU scanner camouflage)
       if (url.pathname === "/robots.txt") {
         return new Response(request.method === "HEAD" ? null : "User-agent: *\nAllow: /\nDisallow: /api/\n", {
           status: 200,
